@@ -1,0 +1,23 @@
+#!/bin/bash
+#
+# Author: Tommy McNeela
+# Version: 1.0-3 (9/10/2015)
+#
+. /usr/local/lib/functions_lib.sh
+#
+print_debug "Debug flag set."
+CONTROL_SECRET=${CONTROL_SECRET:-"SECRET"}
+APP_DIR="/usr/local/sbin"
+REBUILD_CMD="${APP_DIR}/rebuild_file"
+PORT=${PORT:-50001}
+MSG="start"
+while [ "$MSG" != "${CONTROL_SECRET}" ]; do
+	print_debug "Waiting for incoming message."
+	MSG=`nc -l $PORT`
+	print_debug "Received message: $MSG"
+	if [ `echo ${MSG} | grep -ic "DONE$"` -gt 0 ]; then
+		${REBUILD_CMD} ${MSG} 2>&1 &
+	elif [ `echo ${MSG} | grep -ic "FAILED$"` -gt 0 ]; then
+		${REBUILD_CMD} ${MSG} 2>&1 &
+	fi
+done

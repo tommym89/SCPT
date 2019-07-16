@@ -1,0 +1,51 @@
+#!/bin/bash
+#
+# Author: Tommy McNeela
+# Version: 1.0-3 (9/10/2015)
+#
+. /usr/local/lib/functions_lib.sh
+#
+function usage {
+	echo "Usage:  $0 <name of original file> <MD5 sum of file> <number of split files> <destination directory> <status>"
+	exit 1
+}
+#
+function rebuild {
+	FILES=
+	i=0
+	while [[ $i < ${NUM_SPLIT_FILES} ]]; do
+		FILES="${FILES} ${DEST_DIR}/${MD5_SUM}_${i}"
+		((i++))
+	done
+	test `echo $1 | grep -c "FAILED"` -eq 0 && cat ${FILES} > ${OUTPUT_FILE}
+	rm ${FILES}
+}
+#
+test $# -ne 5 && usage
+#
+FILE_NAME=$1
+MD5_SUM=$2
+NUM_SPLIT_FILES=$3
+DEST_DIR=$4
+STATUS=`to_upper_case $5`
+OUTPUT_FILE="${DEST_DIR}/${FILE_NAME}"
+#
+case "${STATUS}" in
+	"DONE")
+		rebuild
+		if [ `md5sum ${OUTPUT_FILE} | awk '{ print $1 }'` != "${MD5_SUM}" ]; then
+			echo "Error, rebuilt file does not match original MD5 sum!"
+			exit -1
+		fi
+		print_debug "Rebuild successful!"
+		;;
+	"FAILED")
+		rebuild "${STATUS}"
+		print_debug "File transfer error, aborted rebuild."
+		exit 1
+		;;
+	*)
+		;;
+esac
+#
+exit 0

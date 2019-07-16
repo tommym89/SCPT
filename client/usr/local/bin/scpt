@@ -1,0 +1,128 @@
+#!/bin/bash
+#
+# Author: Tommy McNeela
+# Version: 1.0-3 (9/10/2015)
+#
+. /usr/local/lib/functions_lib.sh
+CONTROL_PORT=${CONTROL_PORT:-50001}
+CHUNKS=5
+CHUNKS_LIMIT=9
+VERBOSE=1
+#
+function usage {
+	echo "Usage:  $0 <FILE> <username>@<server>:<remote_dir> [-i <identity_file>] [-n <num_split_files> (< 10)] [-q]"
+	exit 1
+}
+#
+test $# -lt 2 && usage
+#
+TRANSFER_FILE=$1
+SCP_ARGS=$2
+shift 2
+SERVER=`echo ${SCP_ARGS} | awk -F'@' '{ print $2 }' | awk -F':' '{ print $1 }'`
+DEST_DIR=`echo ${SCP_ARGS} | awk -F':' '{ print $NF }'`
+FILENAME=`echo ${TRANSFER_FILE} | awk -F'/' '{ print $NF }'`
+ID_FILE=
+#
+for arg in "$@"; do
+	case "${arg}" in
+		"-n")
+			CHUNKS=$2
+			test ${CHUNKS} -gt 9 && usage
+			shift 2
+			;;
+		"-i")
+			ID_FILE="-i $2"
+			shift 2
+			;;
+		"-q")
+			VERBOSE=0
+			shift
+			;;
+		*)
+			;;
+	esac
+done
+#
+test `echo "${ID_FILE}" | grep -c "^-i "` -eq 0 && read -sp "Please enter your password: " PASSWORD
+echo
+#
+MD5_SUM=`md5sum ${TRANSFER_FILE} | awk '{ print $1 }'`
+split -a 1 -d -n ${CHUNKS} ${TRANSFER_FILE} "${MD5_SUM}_"
+#
+print_debug "
+TRANSFER_FILE: ${TRANSFER_FILE}
+FILENAME: ${FILENAME}
+MD5_SUM: ${MD5_SUM}
+SCP_ARGS: ${SCP_ARGS}
+ID_FILE: ${ID_FILE}
+SERVER: ${SERVER}
+DEST_DIR: ${DEST_DIR}
+CHUNKS: ${CHUNKS}
+"
+#
+PIDS=()
+i=0
+START_TSTAMP=`date +%s`
+while [[ $i < ${CHUNKS} ]]; do
+	if [ `echo "${ID_FILE}" | grep -c "^-i "` -eq 0 ]; then
+		sshpass -p${PASSWORD} scp "${MD5_SUM}_${i}" ${SCP_ARGS} >/dev/null 2>&1 &
+	else
+		scp ${ID_FILE} "${MD5_SUM}_${i}" ${SCP_ARGS} >/dev/null 2>&1 &
+	fi
+	PIDS=(${PIDS[@]} $!)
+	((i++))
+done
+SUCCESS_CODE=0
+STATUS_MSG="DONE"
+THREADS_COMPLETE=0
+#
+# wait for background processes to finish
+echo "Started all ${CHUNKS} scp threads, waiting for completion..."
+for p in ${PIDS[@]}; do
+	wait ${p}
+	if [ $? -eq -1 ]; then
+		SUCCESS_CODE=-1
+	else
+		((THREADS_COMPLETE++))
+		#echo "Transfer `echo "scale=4; (${THREADS_COMPLETE}/${CHUNKS})*100" | bc`% complete."
+		echo "${THREADS_COMPLETE} out of ${CHUNKS} transfer threads complete."
+	fi
+done
+FINISH_TSTAMP=`date +%s`
+#
+if [ ${SUCCESS_CODE} -ne 0 ]; then
+	echo "Error copying ${FILENAME} to server!"
+	STATUS_MSG="FAILED"
+fi
+#
+if [ ${VERBOSE} -ne 0 ]; then
+	TRANSFER_SECONDS=`expr ${FINISH_TSTAMP} - ${START_TSTAMP}`
+	FILE_SIZE=`du -b ${TRANSFER_FILE} | awk '{ print $1 }'`
+	echo "${FILE_SIZE} bytes transferred in ${TRANSFER_SECONDS} seconds; `echo "scale=3; (${FILE_SIZE}/${TRANSFER_SECONDS})/1048576" | bc` MB/s"
+fi
+#
+# send status message
+nc ${SERVER} ${CONTROL_PORT} << EOM
+${FILENAME}
+${MD5_SUM}
+${CHUNKS}
+${DEST_DIR}
+${STATUS_MSG}
+EOM
+#
+rm ${MD5_SUM}_*
+test ${SUCCESS_CODE} -ne 0 && exit -1
+#
+#echo "Finished transferring file to destination host. Waiting for confirmation..."
+#MSG=`nc -l ${CONTROL_PORT}`
+#if [ `echo "${MSG}" | grep -c "^${FILENAME} OK$"` -gt 0 ]; then
+#	echo "Destination host confirmed successful copy."
+#else
+#	echo "Error, received fail message from destination host: \"${MSG}\""
+#	echo "File ${FILENAME} not transferred successfully."
+#	exit -1
+#fi
+echo "Finished copying ${FILENAME} to destination!"
+#
+exit 0
